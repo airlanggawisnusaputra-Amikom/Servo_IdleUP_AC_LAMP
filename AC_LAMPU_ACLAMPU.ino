@@ -1,7 +1,6 @@
 /*
 ===========================================================
  ESP32 IDLE UP CONTROLLER V3
- Part 1 / 3
  Author : Airlangga + ChatGPT
 
  Hardware
@@ -32,9 +31,7 @@ const char* password = "12345678";
 //===========================================================
 
 const uint8_t SERVO_PIN = 25;
-
-const uint8_t AC_TRIGGER_PIN = 21;
-const uint8_t LAMP_TRIGGER_PIN = 18;
+const uint8_t TRIGGER_PIN = 21;
 
 //===========================================================
 // SERVO
@@ -49,14 +46,12 @@ Servo servo;
 struct ServoConfig
 {
     int homeAngle;
-
-    int acAngle;
-
-    int lampAngle;
-
-    int acLampAngle;
+    int idleAngle;
 
     bool enableIdle;
+
+    int triggerPin;
+
 };
 
 ServoConfig config;
@@ -68,17 +63,14 @@ ServoConfig config;
 enum ServoState
 {
     STATE_HOME,
-    STATE_AC,
-    STATE_LAMP,
-    STATE_AC_LAMP
+    STATE_IDLE
 };
 
 ServoState currentState = STATE_HOME;
 
 int currentAngle = 90;
 
-bool lastACTriggerState = HIGH;
-bool lastLampTriggerState = HIGH;
+bool lastTriggerState = HIGH;
 
 //===========================================================
 // HTML
@@ -176,29 +168,15 @@ HIGH
 
 <div class="card">
 
-<h3>Trigger AC</h3>
+<h3>Servo Position</h3>
 
-<div class="value red" id="triggerAC">
-HIGH
-</div>
-
-<hr style="margin:20px 0;">
-
-<h3>Trigger Lamp</h3>
-
-<div class="value red" id="triggerLamp">
-HIGH
-</div>
-
-<hr style="margin:20px 0;">
-
-<h3>Servo Mode</h3>
-
-<div class="value" id="servoMode">
-HOME
-</div>
+<div class="value" id="servoPos">0°</div>
 
 </div>
+
+<div class="card">
+
+<h3>Home Position</h3>
 
 Current
 
@@ -218,7 +196,7 @@ New
 
 <div class="card">
 
-<h3>AC Position</h3>
+<h3>Idle Position</h3>
 
 Current
 
@@ -232,47 +210,7 @@ New
 
 <br>
 
-<button onclick="saveIdle()">SAVE AC</button>
-
-</div>
-
-<div class="card">
-
-<h3>Lamp Position</h3>
-
-Current
-
-<div class="value" id="lampPos">0°</div>
-
-New
-
-<br><br>
-
-<input id="lampInput" type="number">
-
-<br>
-
-<button onclick="saveLamp()">SAVE LAMP</button>
-
-</div>
-
-<div class="card">
-
-<h3>AC + Lamp Position</h3>
-
-Current
-
-<div class="value" id="acLampPos">0°</div>
-
-New
-
-<br><br>
-
-<input id="acLampInput" type="number">
-
-<br>
-
-<button onclick="saveAcLamp()">SAVE AC + LAMP</button>
+<button onclick="saveIdle()">SAVE IDLE</button>
 
 </div>
 
@@ -290,53 +228,45 @@ document.getElementById("servoPos").innerHTML=data.current+"°";
 
 document.getElementById("homePos").innerHTML=data.home+"°";
 
-document.getElementById("idlePos").innerHTML=data.ac+"°";
+document.getElementById("idlePos").innerHTML=data.idle+"°";
 
-document.getElementById("lampPos").innerHTML=data.lamp+"°";
-
-document.getElementById("acLampPos").innerHTML=data.aclamp+"°";
-
-document.getElementById("servoMode").innerHTML=data.mode;
-
-
-
-let ac=document.getElementById("triggerAC");
-
-ac.innerHTML=data.triggerAC;
-
-if(data.triggerAC=="LOW")
-{
-
-ac.className="value green";
-
-}
-else
-{
-
-ac.className="value red";
-
-}
-
-
-
-let lamp=document.getElementById("triggerLamp");
-
-lamp.innerHTML=data.triggerLamp;
-
-if(data.triggerLamp=="LOW")
-{
-
-lamp.className="value green";
-
-}
-else
-{
-
-lamp.className="value red";
-
+let t=document.getElementById("triggerStatus");
+t.innerHTML=data.trigger;
+if(data.trigger=="LOW"){
+ t.className="value green";
+}else{
+ t.className="value red";
 }
 
 });
+
+}
+
+function saveHome(){
+
+let a=parseInt(document.getElementById("homeInput").value);
+
+if(isNaN(a)) return;
+
+if(a<0) a=0;
+
+if(a>180) a=180;
+
+fetch("/saveHome?angle="+a)
+
+.then(()=>updateStatus());
+
+}
+
+function saveIdle(){
+
+let a=document.getElementById("idleInput").value;
+
+fetch("/saveIdle?angle="+a)
+
+.then(()=>updateStatus());
+
+}
 
 setInterval(updateStatus,500);
 
@@ -381,50 +311,29 @@ void handleRoot()
 
 void handleStatus()
 {
-    String mode = "HOME";
-
-    switch(currentState)
-    {
-        case STATE_HOME:
-            mode = "HOME";
-            break;
-
-        case STATE_AC:
-            mode = "AC";
-            break;
-
-        case STATE_LAMP:
-            mode = "LAMP";
-            break;
-
-        case STATE_AC_LAMP:
-            mode = "AC + LAMP";
-            break;
-    }
 
     String json="{";
 
-    json += "\"current\":" + String(currentAngle) + ",";
-    json += "\"home\":" + String(config.homeAngle) + ",";
-    json += "\"ac\":" + String(config.acAngle) + ",";
-    json += "\"lamp\":" + String(config.lampAngle) + ",";
-    json += "\"aclamp\":" + String(config.acLampAngle) + ",";
+    json += "\"enable\":";
 
-    json += "\"triggerAC\":\"";
-    json += (digitalRead(AC_TRIGGER_PIN)==LOW) ? "LOW" : "HIGH";
-    json += "\",";
+    json += config.enableIdle ? "true" : "false";
+    json+=",";
+    json+="\"current\":"+String(currentAngle)+",";
 
-    json += "\"triggerLamp\":\"";
-    json += (digitalRead(LAMP_TRIGGER_PIN)==LOW) ? "LOW" : "HIGH";
-    json += "\",";
+    json+="\"home\":"+String(config.homeAngle)+",";
 
-    json += "\"mode\":\"";
-    json += mode;
-    json += "\"";
+    json+="\"idle\":"+String(config.idleAngle)+",";
 
-    json += "}";
+    json+="\"trigger\":\"";
+
+    json+=(digitalRead(TRIGGER_PIN)==LOW) ? "LOW" : "HIGH";
+
+    json+="\"";
+
+    json+="}";
 
     server.send(200,"application/json",json);
+
 }
 
 void handleEnable()
@@ -486,62 +395,14 @@ void handleSaveIdle()
 
         a=constrain(a,0,180);
 
-        config.acAngle=a;
+        config.idleAngle=a;
 
-        prefs.putInt("ac",a);
+        prefs.putInt("idle",a);
 
-        if(currentState==STATE_AC)
-      {
-    moveServo(config.acAngle);
-      }
-
-        server.send(200,"text/plain","OK");
-
-        return;
-
-    }
-
-    server.send(400,"text/plain","ERROR");
-
-}
-
-void handleSaveLamp()
+        if(currentState==STATE_IDLE)
 {
-
-    if(server.hasArg("angle"))
-    {
-
-        int a = server.arg("angle").toInt();
-
-        a = constrain(a,0,180);
-
-        config.lampAngle = a;
-
-        prefs.putInt("lamp",a);
-
-        server.send(200,"text/plain","OK");
-
-        return;
-
-    }
-
-    server.send(400,"text/plain","ERROR");
-
+    moveServo(config.idleAngle);
 }
-
-void handleSaveAcLamp()
-{
-
-    if(server.hasArg("angle"))
-    {
-
-        int a = server.arg("angle").toInt();
-
-        a = constrain(a,0,180);
-
-        config.acLampAngle = a;
-
-        prefs.putInt("aclamp",a);
 
         server.send(200,"text/plain","OK");
 
@@ -561,51 +422,37 @@ bool lastRead = HIGH;
 
 void updateState()
 {
+    bool now = digitalRead(TRIGGER_PIN);
 
-    bool ac = digitalRead(AC_TRIGGER_PIN)==LOW;
+    if(now != lastRead)
+    {
+        triggerTimer = millis();
+        lastRead = now;
+    }
 
-    bool lamp = digitalRead(LAMP_TRIGGER_PIN)==LOW;
+    if(millis() - triggerTimer > 30)
+    {
+        triggerStable = now;
+    }
 
-    if(!ac && !lamp)
+    if(triggerStable == LOW)
+    {
+        if(currentState != STATE_IDLE)
+        {
+            currentState = STATE_IDLE;
+            Serial.println("STATE -> IDLE");
+            moveServo(config.idleAngle);
+        }
+    }
+    else
     {
         if(currentState != STATE_HOME)
         {
             currentState = STATE_HOME;
-
+            Serial.println("STATE -> HOME");
             moveServo(config.homeAngle);
         }
     }
-
-    else if(ac && !lamp)
-    {
-        if(currentState != STATE_AC)
-        {
-            currentState = STATE_AC;
-
-            moveServo(config.acAngle);
-        }
-    }
-
-    else if(!ac && lamp)
-    {
-        if(currentState != STATE_LAMP)
-        {
-            currentState = STATE_LAMP;
-
-            moveServo(config.lampAngle);
-        }
-    }
-
-    else
-    {
-        if(currentState != STATE_AC_LAMP)
-        {
-            currentState = STATE_AC_LAMP;
-
-            moveServo(config.acLampAngle);
-        }
-    }
-
 }
 
 //===========================================================
@@ -621,15 +468,11 @@ void setup()
 
     config.homeAngle = prefs.getInt("home", 90);
 
-    config.acAngle = prefs.getInt("ac", 120);
-
-    config.lampAngle = prefs.getInt("lamp", 5);
-
-    config.acLampAngle = prefs.getInt("aclamp", 125);
-
     config.enableIdle = true;
 
-    config.acAngle = prefs.getInt("idle", 120);
+    config.triggerPin = TRIGGER_PIN;
+
+    config.idleAngle = prefs.getInt("idle", 120);
 
     servo.setPeriodHertz(50);
     servo.attach(SERVO_PIN,500,2500);
@@ -638,11 +481,9 @@ void setup()
 
     moveServo(config.homeAngle);
 
-    pinMode(AC_TRIGGER_PIN, INPUT_PULLUP);
-    pinMode(LAMP_TRIGGER_PIN, INPUT_PULLUP);
+    pinMode(TRIGGER_PIN, INPUT_PULLUP);
 
-    lastACTriggerState = digitalRead(AC_TRIGGER_PIN);
-    lastLampTriggerState = digitalRead(LAMP_TRIGGER_PIN);
+    lastTriggerState = digitalRead(TRIGGER_PIN);
 
     WiFi.softAP(ssid,password);
 
@@ -653,10 +494,6 @@ void setup()
     server.on("/saveHome",handleSaveHome);
 
     server.on("/saveIdle",handleSaveIdle);
-
-    server.on("/saveLamp",handleSaveLamp);
-
-    server.on("/saveAcLamp",handleSaveAcLamp);
 
     server.begin();
 
