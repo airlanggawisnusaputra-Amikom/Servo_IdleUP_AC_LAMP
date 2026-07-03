@@ -1,3 +1,5 @@
+//AC LAMP + DELAY OFF AC
+
 #include <WiFi.h>
 #include <WebServer.h>
 #include <ESP32Servo.h>
@@ -74,12 +76,22 @@ struct Config
 Config config;
 
 ServoMode currentMode = MODE_HOME;
+// Mode hasil pembacaan GPIO saat ini
+ServoMode targetMode = MODE_HOME;
 
 int currentServoAngle = 90;
 
 bool acTrigger = false;
 
 bool lampTrigger = false;
+
+unsigned long acOffTimer = 0;
+
+bool acOffTimerRunning = false;
+
+const unsigned long DEFAULT_AC_OFF_DELAY = 2000;
+
+unsigned long acOffDelay = DEFAULT_AC_OFF_DELAY;
 
 
 
@@ -116,7 +128,32 @@ void moveServo(int angle)
     currentServoAngle = angle;
 }
 
+//======================================================
+// READ TARGET MODE
+//======================================================
 
+void updateTargetMode()
+{
+    acTrigger = (digitalRead(PIN_AC) == LOW);
+    lampTrigger = (digitalRead(PIN_LAMP) == LOW);
+
+    if (acTrigger && lampTrigger)
+    {
+        targetMode = MODE_AC_LAMP;
+    }
+    else if (acTrigger)
+    {
+        targetMode = MODE_AC;
+    }
+    else if (lampTrigger)
+    {
+        targetMode = MODE_LAMP;
+    }
+    else
+    {
+        targetMode = MODE_HOME;
+    }
+}
 
 //======================================================
 // LOAD CONFIG
@@ -137,6 +174,8 @@ void loadConfig()
 
     config.preset[MODE_AC_LAMP] =
         prefs.getInt("aclamp",130);
+
+    acOffDelay = prefs.getULong("acdelay", DEFAULT_AC_OFF_DELAY);
 }
 
 
@@ -181,6 +220,11 @@ void savePreset(ServoMode mode)
 
             break;
     }
+}
+
+void saveAcOffDelay()
+{
+    prefs.putULong("acdelay", acOffDelay);
 }
 
 //======================================================
@@ -477,6 +521,44 @@ SAVE
 
 </div>
 
+<div class="card">
+
+<h3>
+
+AC OFF Delay
+
+</h3>
+
+Current
+
+<div id="acDelayCurrent">
+
+2000
+
+</div>
+
+New
+
+<input
+
+id="acDelayInput"
+
+type="number"
+
+min="0"
+
+max="10000">
+
+<button
+
+onclick="saveAcDelay()">
+
+SAVE
+
+</button>
+
+</div>
+
 <script>
 
 function updateStatus()
@@ -508,6 +590,11 @@ function updateStatus()
 
         document.getElementById("acLampCurrent").innerHTML =
             data.aclamppos;
+        
+        document.getElementById("acDelayCurrent").innerHTML =
+            data.acdelay + " ms";
+        
+        
 
     });
 }
@@ -548,7 +635,30 @@ function saveAcLamp()
     .then(()=>updateStatus());
 }
 
-setInterval(updateStatus,300);
+function saveAcDelay()
+{
+    let value = parseInt(document.getElementById("acDelayInput").value);
+
+    if(isNaN(value))
+    {
+        alert("Masukkan nilai delay.");
+        return;
+    }
+
+    if(value < 0)
+        value = 0;
+
+    if(value > 10000)
+        value = 10000;
+
+    fetch("/saveAcDelay?value=" + value)
+    .then(() =>
+    {
+        updateStatus();
+    });
+}
+
+setInterval(updateStatus,500);
 
 window.onload=updateStatus;
 
@@ -572,6 +682,7 @@ void handleStatus()
     String json="{";
 
     json+="\"servo\":"+String(currentServoAngle)+",";
+    json += "\"acdelay\":" + String(acOffDelay) + ",";
 
     json+="\"mode\":\"";
     json+=modeName[currentMode];
@@ -668,29 +779,103 @@ void handleSaveAcLamp()
 }
 
 //======================================================
+// SAVE AC OFF DELAY
+//======================================================
+
+void handleSaveAcDelay()
+{
+    if(server.hasArg("value"))
+    {
+        unsigned long d = server.arg("value").toInt();
+
+        // Batas aman
+        if(d > 10000)
+            d = 10000;
+
+        acOffDelay = d;
+
+        saveAcOffDelay();
+
+        server.send(200, "text/plain", "OK");
+    }
+    else
+    {
+        server.send(400, "text/plain", "NO VALUE");
+    }
+}
+
+//======================================================
 // UPDATE MODE
 //======================================================
 
 void updateMode()
 {
-    acTrigger = (digitalRead(PIN_AC) == LOW);
-    lampTrigger = (digitalRead(PIN_LAMP) == LOW);
+    //==================================================
+    // Kalau target bukan HOME
+    //==================================================
 
-    if(!acTrigger && !lampTrigger)
+    if(targetMode != MODE_HOME)
     {
-        currentMode = MODE_HOME;
+        // Batalkan timer jika sedang berjalan
+        acOffTimerRunning = false;
+
+        // Langsung pindah mode jika berbeda
+        if(currentMode != targetMode)
+        {
+            currentMode = targetMode;
+        }
+
+        return;
     }
-    else if(acTrigger && !lampTrigger)
+
+    //==================================================
+// Target = HOME
+//==================================================
+
+// Kalau berasal dari LAMP, langsung HOME
+if(currentMode == MODE_LAMP)
+{
+    currentMode = MODE_HOME;
+    acOffTimerRunning = false;
+    return;
+}
+
+// Kalau memang sudah HOME
+if(currentMode == MODE_HOME)
+{
+    acOffTimerRunning = false;
+    return;
+}
+
+// Selain itu (AC atau AC+LAMP) pakai delay
+if(!acOffTimerRunning)
+{
+    acOffTimerRunning = true;
+    acOffTimer = millis();
+    return;
+}
+
+if(millis() - acOffTimer >= acOffDelay)
+{
+    currentMode = MODE_HOME;
+    acOffTimerRunning = false;
+}
+}
+
+//======================================================
+// DEBUG MODE
+//======================================================
+
+void debugMode()
+{
+    static ServoMode lastMode = MODE_HOME;
+
+    if(lastMode != currentMode)
     {
-        currentMode = MODE_AC;
-    }
-    else if(!acTrigger && lampTrigger)
-    {
-        currentMode = MODE_LAMP;
-    }
-    else
-    {
-        currentMode = MODE_AC_LAMP;
+        Serial.print("MODE -> ");
+        Serial.println(modeName[currentMode]);
+
+        lastMode = currentMode;
     }
 }
 
@@ -737,6 +922,8 @@ void setup()
 
     server.on("/saveAcLamp", handleSaveAcLamp);
 
+    server.on("/saveAcDelay", handleSaveAcDelay);
+
     server.begin();
 
     Serial.println();
@@ -754,7 +941,11 @@ void loop()
 {
     server.handleClient();
 
-    updateMode();
+updateTargetMode();
 
-    updateServo();
+updateMode();
+
+updateServo();
+
+debugMode();
 }
